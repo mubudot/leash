@@ -1,0 +1,10 @@
+/target/
+/out/
+/artifacts/
+/.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+TASK_P1.md
