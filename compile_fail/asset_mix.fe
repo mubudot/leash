@@ -1,0 +1,10 @@
+use ingot::units::{Asset, Amount}
+struct A {}
+struct B {}
+impl Asset for A { const DECIMALS: u256 = 6 }
+impl Asset for B { const DECIMALS: u256 = 18 }
+fn reject_asset_mix() {
+    let a = Amount<A> { raw: 1 }
+    let b = Amount<B> { raw: 1 }
+    let _ = a.checked_add(b)
+}

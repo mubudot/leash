@@ -152,3 +152,16 @@ fn policy_rejections_and_over_cap_ordinary_zero() {
 fn token_arithmetic_is_checked() {
     let _ = Amount<MockUsd> { raw: MAX_AMOUNT }.checked_add(Amount<MockUsd> { raw: 1 })
 }
+
+#[test]
+fn asset_scaling_uses_declared_decimals() {
+    assert!(Amount<MockUsd>::from_units(2).raw == 2_000_000)
+    assert!(
+        Amount<OtherToken>::from_units(2).raw == 2_000_000_000_000_000_000,
+    )
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn asset_scaling_overflow_is_checked() {
+    let _ = Amount<MockUsd>::from_units(MAX_AMOUNT)
+}

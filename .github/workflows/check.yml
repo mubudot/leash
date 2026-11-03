@@ -1,0 +1,27 @@
+name: verify
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  phase1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Fe and Foundry
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leash-tools"
+          cd "$RUNNER_TEMP/leash-tools"
+          curl -fL --retry 3 https://github.com/argotorg/fe/releases/download/v26.5.1/fe_linux_amd64 -o fe
+          echo '2d48fd56e45f56a775bea73a3180ffcab73ad440887d0a985be2050fb5993916  fe' | sha256sum -c -
+          curl -fL --retry 3 https://github.com/foundry-rs/foundry/releases/download/v1.8.7/foundry_v1.8.7_linux_amd64.tar.gz -o foundry.tar.gz
+          echo 'ba470eb718e779e4b0e3f1520b5284231b1bf98e9a39de07fb8f77ed70525bcf  foundry.tar.gz' | sha256sum -c -
+          tar -xzf foundry.tar.gz
+          chmod +x fe
+          echo "$RUNNER_TEMP/leash-tools" >> "$GITHUB_PATH"
+      - name: Format, unit, negative compilation, O2 build and Anvil checks
+        run: ./scripts/check.sh
+      - name: Mutation controls
+        run: python3 scripts/mutations.py

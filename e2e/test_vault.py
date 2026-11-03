@@ -121,7 +121,7 @@ def approval(nonce, amount=30, agent=None, payee=None, epoch=None, deadline=None
         },
         'primaryType': 'OverCapApproval',
         'domain': domain or dict(name='Leash', version='1', chainId=31337, verifyingContract=V),
-        'message': dict(agent=agent, payee=payee, amount=amount, nonce=nonce, deadline=deadline, epoch=epoch),
+        'message': dict(agent=agent, payee=payee, amount=str(amount), nonce=str(nonce), deadline=str(deadline), epoch=str(epoch)),
     }
     sig = rpc('eth_signTypedData_v4', O, json.dumps(typed))
     return [payee, amount, nonce, deadline, epoch, sig]
@@ -173,7 +173,10 @@ def ordinary_and_admin():
 def approvals():
     configure(allow=True)
     signed = approval(1)
-    send(A, APPROVED, *signed)
+    receipt = send(A, APPROVED, *signed)
+    assert receipt['logs'][0]['topics'] == [cast('keccak', 'SpentApproved(address,address,uint256,uint256,uint256)')]
+    words=[int(receipt['logs'][0]['data'][i:i+64],16) for i in range(2,len(receipt['logs'][0]['data']),64)]
+    assert words == [int(A,16),int(P,16),signed[1],signed[2],read('remaining(address)',A)[1]-3600]
     assert read('remaining(address)', A)[0] == 0
     rejected(A, APPROVED, signed, 'NonceUsed', 1)
     configure(B)
@@ -181,9 +184,11 @@ def approvals():
     rejected(B, APPROVED, duplicate, 'NonceUsed', 1)
     mark('approved bypasses caps and payees, exact accounting and global nonce')
     configure()
+    # Equal epochs ensure copied calldata reaches signature verification.
+    while read('epoch(address)',B)[0] < read('epoch(address)',A)[0]: configure(B)
     signed = approval(2)
     # Every signed field is bound, including caller and current epoch.
-    rejected(B, APPROVED, signed, 'EpochMismatch' if read('epoch(address)',B)[0] != signed[4] else 'InvalidSignature', 2)
+    rejected(B, APPROVED, signed, 'InvalidSignature', 2)
     for index,replacement in [(0,B),(1,31),(2,3),(3,signed[3]+1)]:
         mutated=signed.copy(); mutated[index]=replacement
         rejected(A, APPROVED, mutated, 'InvalidSignature', mutated[2])
@@ -239,6 +244,9 @@ def approvals():
     send(O,'allowPayee(address,address,bool)',A,P,False)
     send(A,APPROVED,*signed)
     mark('payee removal leaves exact owner approval valid')
+    configure()
+    zero=approval(12,amount=0)
+    rejected(A,APPROVED,zero,'ZeroAmount',12)
 
 
 def failure_and_callbacks():
@@ -248,6 +256,7 @@ def failure_and_callbacks():
     for address,code in [(R,'0x60006000fd'),(G,'0x5b600056')]:
         rpc('anvil_setCode',address,code)
         rejected(A,SPEND,[address,1],'TransferFailed')
+        rejected(O,'withdraw(address,uint256)',[address,1],'TransferFailed')
         args=approval(20 if address==R else 21,payee=address)
         rejected(A,APPROVED,args,'TransferFailed',args[2])
     mark('reverting and gas-burning recipients roll back state, nonces and events')
@@ -279,6 +288,18 @@ def failure_and_callbacks():
     send(O,'fund()',value=100_000)
     assert read('remaining(address)',A)[0]==20
     mark('exact balance, empty balance, inbound funds never refund spent')
+    # Synthetic full-width balance exercises reachable accounting overflow
+    # after a valid successful MAX_AMOUNT exception; no storage is patched.
+    z='0x0000000000000000000000000000000000009999'
+    rpc('anvil_setBalance',z,'0x0')
+    rpc('anvil_setBalance',V,hex(MAX))
+    configure(t=MAX,c=MAX)
+    send(A,APPROVED,*approval(22,amount=MAX,payee=z))
+    rpc('anvil_setBalance',V,'0x1')
+    rejected(A,APPROVED,approval(23,amount=1),'AccountingOverflow',23)
+    configure()
+    send(O,'fund()',value=100_000)
+    mark('full-width approved accounting overflow preserves nonce and balance')
 
 
 def windows_and_oracle():
@@ -336,6 +357,9 @@ def main():
         else: raise RuntimeError('Anvil failed to start')
         O,A,B,P,R,G=accounts[:6]
         bytecode=(ROOT/'out/LeashVault.bin').read_text().strip().removeprefix('0x')
+        invalid=tx(O,payload='0x'+bytecode+'00'*32)
+        assert int(invalid['status'],16)==0 and invalid['logs']==[]
+        mark('zero owner constructor rejected')
         deploy=tx(O,payload='0x'+bytecode+O[2:].zfill(64))
         assert int(deploy['status'],16)==1
         V=deploy['contractAddress']

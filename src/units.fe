@@ -29,3 +29,10 @@ impl<A: Asset> Amount<A> {
         Amount { raw: self.raw - rhs.raw }
     }
 }
+
+impl<A: Asset> Amount<A> {
+    /// Scale whole token units using checked u256 multiplication/exponentiation.
+    pub fn from_units(_ whole: u256) -> Self {
+        Amount { raw: whole * 10 ** A::DECIMALS }
+    }
+}

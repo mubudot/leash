@@ -1,0 +1,4 @@
+fn reject_lossy_cast() {
+    let wide: u256 = 256
+    let _ = wide as u8
+}

@@ -1,0 +1,4 @@
+use std::evm::{wei, seconds}
+fn reject_unit_mix() {
+    let _ = wei(1) + seconds(1)
+}

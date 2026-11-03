@@ -1,0 +1,4 @@
+use ingot::limits::Profile
+fn reject_profile() {
+    let _: Profile<2, 1, 60> = Profile {}
+}

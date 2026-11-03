@@ -1,0 +1,12 @@
+msg Msg {
+    #[selector = 1]
+    Change,
+}
+pub contract Invalid {
+    mut flag: bool,
+    recv Msg {
+        Change uses (flag) {
+            flag = true
+        }
+    }
+}
