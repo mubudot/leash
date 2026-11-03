@@ -13,11 +13,13 @@ Requirements: **Fe 26.5.1 (149c758)**, **Foundry 1.8.7**, Python 3.10+, Bash, an
 python3 scripts/mutations.py
 ```
 
-The first command checks formatting, runs Fe unit tests and negative compilation cases with positive controls, builds **Sonatina O2**, then deploys that same artifact on a fresh local Anvil. It starts Anvil with `--hardfork osaka --chain-id 31337 --timestamp 1793664000`, chooses a free local port, and stops the process afterward. No external chain, wallet, account credentials, Python packages, or network access are needed after installing the tools. Signing uses Anvil's disposable unlocked accounts via `eth_signTypedData_v4`.
+The first command checks formatting, runs Fe unit tests and negative compilation cases with positive controls, builds **Sonatina O2**, then deploys that same artifact for integration checks and the CLI walkthrough. Each local Anvil starts with `--hardfork osaka --timestamp 1793664000`, uses a free local port, and stops afterward. The main suite and demo use chain ID **31337**; domain regressions also change the live chain ID after deployment and run a fresh deployment on **31338**. No external chain, wallet, account credentials, Python packages, or network access are needed after installing the tools. Signing uses Anvil's disposable unlocked accounts via `eth_signTypedData_v4`, with the default domain chain ID read from RPC.
 
-The second command establishes a passing baseline, then runs ten intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, transfer-success check, ignored payee removal, missing unlock on each of the three transfer routes, all three missing unlocks together, and clipped approved accounting. Source and build artifacts in the repository remain unchanged.
+The second command establishes a passing baseline, then runs eleven intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, transfer-success check, ignored payee removal, missing unlock on each of the three transfer routes, all three missing unlocks together, clipped approved accounting, and a hardcoded domain chain ID of 31337. The baseline build refreshes the repository's `out/` artifacts. Source files remain unchanged; mutant builds and their artifacts are isolated in temporary directories.
 
 Integration tests include a relay that makes two calls within one transaction and callbacks into both spending routes. The original seed **1729** corpus retains its **60 ordinary actions**. Two additional corpora, seeds **1729** and **104729**, each replay **146 mixed actions** against an independent unbounded payment journal, checking approvals, admin/payment orderings, state, exact mined errors, transfers and event payloads. A failure prints the seed, action index and trace for replay.
+
+For the payment walkthrough alone, run `python3 e2e/demo.py`. It builds O2, prints balances, headroom, ABI-decoded events, expected mined errors and receipt gas for 22 transactions, including an exact owner approval, replay rejection, revocation and a separate fixed-window burst trace. See the [current demo guide](e2e/DEMO.md). These receipt observations are not a Solidity gas comparison.
 
 Individual commands:
 
@@ -45,6 +47,7 @@ Build artifacts are under `out/`. CI pins download versions and SHA-256 checksum
 | `compile_fail/` | Unit/asset confusion, invalid const profile, mutable-capability and narrowing fixtures |
 | `e2e/test_vault.py` | Real callers/signatures/transfers/events, adversarial callbacks, seeded Python oracle |
 | `e2e/oracle.py`, `e2e/corpus.py` | Independent payment-journal model and published mixed-action corpora |
+| `e2e/demo.py`, `e2e/DEMO.md` | Asserted local CLI walkthrough, decoded events and receipt gas |
 
 ```fe
 // The vault instantiates this generic policy stack for native ETH.

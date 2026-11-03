@@ -13,6 +13,14 @@ struct OtherToken {}
 impl Asset for OtherToken {
     const DECIMALS: u256 = 18
 }
+struct Decimals78 {}
+impl Asset for Decimals78 {
+    const DECIMALS: u256 = 78
+}
+struct Decimals255 {}
+impl Asset for Decimals255 {
+    const DECIMALS: u256 = 255
+}
 
 #[test]
 fn limits_are_shared_and_full_width() {
@@ -164,4 +172,47 @@ fn asset_scaling_uses_declared_decimals() {
 #[test(should_revert, selector = 0x4e487b71)]
 fn asset_scaling_overflow_is_checked() {
     let _ = Amount<MockUsd>::from_units(MAX_AMOUNT)
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn token_subtraction_underflow_is_checked() {
+    let _ = Amount<MockUsd> { raw: 0 }.checked_sub(Amount<MockUsd> { raw: 1 })
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn scaling_exponent_78_overflow_is_checked() {
+    let _ = Amount<Decimals78>::from_units(1)
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn scaling_exponent_255_overflow_is_checked() {
+    let _ = Amount<Decimals255>::from_units(1)
+}
+
+#[test]
+fn largest_whole_token_scaling_is_representable() {
+    let whole = MAX_AMOUNT / 1_000_000
+    assert!(
+        Amount<MockUsd>::from_units(whole).raw == MAX_AMOUNT - MAX_AMOUNT % 1_000_000,
+    )
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn window_rejects_out_of_domain_time() {
+    let _ = normalise(
+        Timestamp::from_seconds(0),
+        seconds(60),
+        wei(0),
+        Timestamp::from_seconds(MAX_TIMESTAMP + 1),
+    )
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn window_rejects_time_before_anchor() {
+    let _ = normalise(
+        Timestamp::from_seconds(100),
+        seconds(60),
+        wei(0),
+        Timestamp::from_seconds(99),
+    )
 }

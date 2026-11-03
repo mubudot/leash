@@ -111,6 +111,24 @@ fn checked_spent(_ spent: Wei, _ amount: Wei) -> Wei {
     spent + amount
 }
 
+// Anvil timestamps are bounded by u64 and natural epoch exhaustion is
+// impractical. Exercise the actual guards directly at their u256 endpoints.
+#[test]
+fn epoch_and_time_last_valid_values() {
+    assert!(next_epoch(MAX_AMOUNT - 1) == MAX_AMOUNT)
+    require_time(Timestamp::from_seconds(MAX_TIMESTAMP))
+}
+
+#[test(should_revert, selector = 0x73cde751)]
+fn epoch_exhaustion_rejects_without_wrapping() {
+    let _ = next_epoch(MAX_AMOUNT)
+}
+
+#[test(should_revert, selector = 0xcc179e18)]
+fn timestamp_outside_numeric_domain_is_rejected() {
+    require_time(Timestamp::from_seconds(MAX_TIMESTAMP + 1))
+}
+
 /// Concrete ETH vault. Only the constructor can assign owner.
 pub contract LeashVault {
     owner: Address,

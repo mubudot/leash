@@ -10,3 +10,4 @@ export FE="${FE:-fe}" CAST="${CAST:-cast}" ANVIL="${ANVIL:-anvil}"
 python3 scripts/compile_fail.py
 "$FE" build -O 2 --emit bytecode,runtime-bytecode,abi
 python3 e2e/test_vault.py
+python3 e2e/demo.py --no-build

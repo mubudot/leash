@@ -20,7 +20,8 @@ for command in ([FE, 'test'], [FE, 'build', '-O', '2', '--emit', 'bytecode,runti
     assert result.returncode == 0, result.stdout + result.stderr
 
 for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success', 'payee_removal',
-             'spend_unlock', 'approved_unlock', 'withdraw_unlock', 'all_unlocks', 'approved_clipping'):
+             'spend_unlock', 'approved_unlock', 'withdraw_unlock', 'all_unlocks', 'approved_clipping',
+             'hardcoded_chain_id'):
     with tempfile.TemporaryDirectory(prefix='leash-mutation-') as temp:
         project = Path(temp)
         shutil.copy(ROOT / 'fe.toml', project / 'fe.toml')
@@ -54,6 +55,10 @@ for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success
             clipping = assignment + '\n            if record.spent > record.window_cap {\n                record.spent = record.window_cap\n            }'
             changed = original[:start] + original[start:].replace(assignment, clipping, 1)
             expected = 'expected revert: AccountingOverflow'
+        elif name == 'hardcoded_chain_id':
+            assert original.count('ctx.chainid()') == 1
+            changed = original.replace('ctx.chainid()', '31337')
+            expected = 'live chain ID domain must reject the 31337 signature'
         else:
             route = {'spend_unlock': 0, 'approved_unlock': 1, 'withdraw_unlock': 2}[name]
             parts = original.split('guard.unlock()')

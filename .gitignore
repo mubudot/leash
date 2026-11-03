@@ -11,4 +11,13 @@ TASK_*.md
 codex_*.log
 codex_*_out.md
 review*_out.md
+/fix*_out.md
+/*_out.md
+/*_last.md
+/agent*.out
+/agent*.err
+/agent*.log*
+/codex*.log*
+/review*.log*
+/fix*.log*
 REVIEW_*.md
