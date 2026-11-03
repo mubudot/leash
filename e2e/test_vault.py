@@ -87,6 +87,11 @@ def mark(label):
     print(f'PASS {N:03d} {label}', flush=True)
 
 
+def mined_error(receipt, error):
+    trace = rpc('debug_traceTransaction', receipt['transactionHash'], {'tracer': 'callTracer'})
+    assert trace['output'] == cast('sig', error + '()'), (error, trace)
+
+
 def rejected(sender, sig, args, error, nonce=0):
     payload = data(sig, *args)
     # Check the exact typed error before mining the same failing request.
@@ -104,6 +109,7 @@ def rejected(sender, sig, args, error, nonce=0):
     after = (read('remaining(address)', A), read('epoch(address)', A), read('nonceUsed(uint256)', nonce), balance(V), balance(P))
     assert before == after, (error, before, after)
     mark(error)
+    return receipt
 
 
 def configure(agent=None, t=10, c=25, period=3600, allow=False):
@@ -168,6 +174,25 @@ def ordinary_and_admin():
     assert read('epoch(address)', A)[0] == old+2
     rejected(A, SPEND, [P,1], 'PayeeDenied')
     mark('unchanged set resets epoch; stale allowlist cannot resurrect')
+
+
+def payee_removal():
+    for spend_first in (True, False):
+        configure(allow=True)
+        send(O, 'allowPayee(address,address,bool)', A, P, True)
+        before = balance(V), balance(P)
+        end = read('remaining(address)', A)[1]
+        if spend_first:
+            send(A, SPEND, P, 1)
+            assert (balance(V), balance(P)) == (before[0] - 1, before[1] + 1)
+            assert read('remaining(address)', A) == (24, end)
+        send(O, 'allowPayee(address,address,bool)', A, P, False)
+        receipt = rejected(A, SPEND, [P, 1], 'PayeeDenied')
+        mined_error(receipt, 'PayeeDenied')
+        spent = int(spend_first)
+        assert (balance(V), balance(P)) == (before[0] - spent, before[1] + spent)
+        assert read('remaining(address)', A) == (25 - spent, end)
+        mark(f'payee removal: spend_first={spend_first}, exact mined denial and rollback')
 
 
 def approvals():
@@ -364,7 +389,7 @@ def main():
         assert int(deploy['status'],16)==1
         V=deploy['contractAddress']
         send(O,'fund()',value=1_000_000)
-        ordinary_and_admin(); approvals(); failure_and_callbacks(); windows_and_oracle()
+        ordinary_and_admin(); payee_removal(); approvals(); failure_and_callbacks(); windows_and_oracle()
         print(f'All {N} integration checks passed; seed 1729, 60 oracle actions.')
     finally:
         process.terminate()

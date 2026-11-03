@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deliberately break four safety conditions in temporary copies; require runtime detection."""
+"""Deliberately break safety conditions in temporary copies; require runtime detection."""
 import os
 from pathlib import Path
 import shutil
@@ -19,7 +19,7 @@ for command in ([FE, 'test'], [FE, 'build', '-O', '2', '--emit', 'bytecode,runti
     result = run(command, ROOT)
     assert result.returncode == 0, result.stdout + result.stderr
 
-for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success'):
+for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success', 'payee_removal'):
     with tempfile.TemporaryDirectory(prefix='leash-mutation-') as temp:
         project = Path(temp)
         shutil.copy(ROOT / 'fe.toml', project / 'fe.toml')
@@ -37,9 +37,12 @@ for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success
         elif name == 'nonce_consumption':
             changed = original.replace('agents[agent] = record\n            used_nonces[nonce] = true', 'agents[agent] = record')
             expected = 'expected revert: NonceUsed'
-        else:
+        elif name == 'send_success':
             changed = original.replace('.success() {', '.success() && false {')
             expected = 'expected revert: TransferFailed'
+        else:
+            changed = original.replace('payees[(agent, epoch, payee)] = allowed', 'payees[(agent, epoch, payee)] = true')
+            expected = 'expected revert: PayeeDenied'
         assert changed != original, name
         target.write_text(changed)
         if name == 'boundary':
