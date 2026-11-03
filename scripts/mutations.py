@@ -19,7 +19,8 @@ for command in ([FE, 'test'], [FE, 'build', '-O', '2', '--emit', 'bytecode,runti
     result = run(command, ROOT)
     assert result.returncode == 0, result.stdout + result.stderr
 
-for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success', 'payee_removal'):
+for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success', 'payee_removal',
+             'spend_unlock', 'approved_unlock', 'withdraw_unlock', 'all_unlocks'):
     with tempfile.TemporaryDirectory(prefix='leash-mutation-') as temp:
         project = Path(temp)
         shutil.copy(ROOT / 'fe.toml', project / 'fe.toml')
@@ -40,9 +41,21 @@ for name in ('boundary', 'approved_activity', 'nonce_consumption', 'send_success
         elif name == 'send_success':
             changed = original.replace('.success() {', '.success() && false {')
             expected = 'expected revert: TransferFailed'
-        else:
+        elif name == 'payee_removal':
             changed = original.replace('payees[(agent, epoch, payee)] = allowed', 'payees[(agent, epoch, payee)] = true')
             expected = 'expected revert: PayeeDenied'
+        elif name == 'all_unlocks':
+            assert original.count('guard.unlock()') == 3
+            changed = original.replace('guard.unlock()', '')
+            expected = 'sequential spend/spend unlock'
+        else:
+            route = {'spend_unlock': 0, 'approved_unlock': 1, 'withdraw_unlock': 2}[name]
+            parts = original.split('guard.unlock()')
+            assert len(parts) == 4
+            changed = 'guard.unlock()'.join(parts[:route+1]) + 'guard.unlock()'.join(parts[route+1:])
+            expected = {'spend_unlock': 'sequential spend/spend unlock',
+                        'approved_unlock': 'sequential approved/approved unlock',
+                        'withdraw_unlock': 'sequential withdraw unlock'}[name]
         assert changed != original, name
         target.write_text(changed)
         if name == 'boundary':

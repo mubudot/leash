@@ -92,6 +92,40 @@ def mined_error(receipt, error):
     assert trace['output'] == cast('sig', error + '()'), (error, trace)
 
 
+def event(log, signature, words):
+    assert log['address'].lower() == V.lower()
+    assert log['topics'] == [cast('keccak', signature)]
+    actual = [int(log['data'][i:i+64], 16) for i in range(2, len(log['data']), 64)]
+    assert actual == words, (signature, actual, words)
+
+
+def install_relay(address, payloads):
+    # Anvil-only EVM relay: CALL each payload, catch failure, and store each
+    # success flag and first return word in slots 2*i and 2*i+1. No compiler
+    # or external package is needed for this adversarial test fixture.
+    def push(value):
+        raw = value.to_bytes(max(1, (value.bit_length() + 7) // 8), 'big')
+        return bytes([0x5f + len(raw)]).hex() + raw.hex()
+
+    code = ''
+    for index, payload in enumerate(payloads):
+        raw = payload.removeprefix('0x')
+        assert len(raw) // 2 < 4096
+        code += push(0) + push(4096) + '52'
+        for offset in range(0, len(raw), 64):
+            code += '7f' + raw[offset:offset+64].ljust(64, '0') + push(offset // 2) + '52'
+        # CALL(out_size=32, out=4096, in_size, in=0, value=0, vault, GAS).
+        code += push(32) + push(4096) + push(len(raw) // 2) + push(0) + push(0)
+        code += '73' + V[2:] + '5af1' + push(2 * index) + '55'
+        code += push(4096) + '51' + push(2 * index + 1) + '55'
+    rpc('anvil_setCode', address, '0x' + code + '00')
+
+
+def relay_results(address, count):
+    return [tuple(int(rpc('eth_getStorageAt', address, hex(2*i+j), 'latest'), 16)
+                  for j in range(2)) for i in range(count)]
+
+
 def rejected(sender, sig, args, error, nonce=0):
     payload = data(sig, *args)
     # Check the exact typed error before mining the same failing request.
@@ -231,10 +265,10 @@ def approvals():
     send(O,'pause()')
     rejected(A,SPEND,[P,1],'Paused')
     rejected(A,APPROVED,signed,'Paused',6)
-    # Owner recovery works while paused; lock must release after each withdrawal.
+    # Owner recovery works while paused.
     send(O,'withdraw(address,uint256)',P,1); send(O,'withdraw(address,uint256)',P,1)
     send(O,'unpause()'); send(A,APPROVED,*signed)
-    mark('pause preserves approvals; owner recovery and lock release')
+    mark('pause preserves approvals; owner recovery while paused')
     signed=approval(7)
     send(O,'revoke(address)',A)
     rejected(A,APPROVED,signed,'UnknownAgent',7)
@@ -274,6 +308,95 @@ def approvals():
     rejected(A,APPROVED,zero,'ZeroAmount',12)
 
 
+def sequential_calls():
+    global V
+    relay = '0x0000000000000000000000000000000000008001'
+    for index, routes in enumerate(((SPEND, SPEND), (APPROVED, APPROVED),
+                                    (SPEND, APPROVED), (APPROVED, SPEND))):
+        configure(relay)
+        end = read('remaining(address)', relay)[1]
+        payloads = []
+        for step, route in enumerate(routes):
+            if route == SPEND:
+                payloads.append(data(SPEND, P, step + 1))
+            else:
+                args = approval(1000 + 2*index + step, amount=step + 1, agent=relay)
+                payloads.append(data(APPROVED, *args))
+        install_relay(relay, payloads)
+        before = balance(V), balance(P)
+        receipt = tx(O, relay)
+        assert int(receipt['status'], 16) == 1
+        results = relay_results(relay, 2)
+        label = '/'.join('spend' if route == SPEND else 'approved' for route in routes)
+        assert results == [(1, 0), (1, 0)], (f'sequential {label} unlock', results)
+        assert (balance(V), balance(P)) == (before[0] - 3, before[1] + 3)
+        assert read('remaining(address)', relay) == (22, end)
+        assert len(receipt['logs']) == 2
+        for step, (route, log) in enumerate(zip(routes, receipt['logs'])):
+            if route == SPEND:
+                event(log, 'Spent(address,address,uint256,uint256)',
+                      [int(relay, 16), int(P, 16), step + 1, end - 3600])
+            else:
+                nonce = 1000 + 2*index + step
+                assert read('nonceUsed(uint256)', nonce) == (1,)
+                event(log, 'SpentApproved(address,address,uint256,uint256,uint256)',
+                      [int(relay, 16), int(P, 16), step + 1, nonce, end - 3600])
+        assert read('nonceUsed(uint256)', 0) == (0,)
+        mark(f'two successful {label} calls in one transaction: transfers, budget, nonces, events')
+
+    # A separate vault has the relay as its immutable owner, so both recovery
+    # calls are authorized by the actual CALL context in one outer transaction.
+    original_vault = V
+    bytecode = (ROOT / 'out/LeashVault.bin').read_text().strip().removeprefix('0x')
+    deploy = tx(O, payload='0x' + bytecode + relay[2:].zfill(64))
+    assert int(deploy['status'], 16) == 1
+    try:
+        V = deploy['contractAddress']
+        send(O, 'fund()', value=20)
+        install_relay(relay, [data('withdraw(address,uint256)', P, amount) for amount in (1, 2)])
+        before = balance(V), balance(P), read('remaining(address)', A), read('epoch(address)', A)
+        receipt = tx(O, relay)
+        assert int(receipt['status'], 16) == 1
+        results = relay_results(relay, 2)
+        assert results == [(1, 0), (1, 0)], ('sequential withdraw unlock', results)
+        assert (balance(V), balance(P)) == (before[0] - 3, before[1] + 3)
+        assert (read('remaining(address)', A), read('epoch(address)', A)) == before[2:]
+        assert read('nonceUsed(uint256)', 0) == (0,)
+        assert len(receipt['logs']) == 2
+        for log, amount in zip(receipt['logs'], (1, 2)):
+            event(log, 'Withdrawn(address,uint256)', [int(P, 16), amount])
+        mark('two successful owner withdrawals in one transaction: transfers and unchanged agent accounting')
+    finally:
+        V = original_vault
+
+
+def approved_callbacks():
+    for kind, inner in enumerate((SPEND, APPROVED)):
+        for index, outer in enumerate((SPEND, APPROVED, 'withdraw(address,uint256)')):
+            configure(R)
+            configure()
+            nonce = 1100 + 3*kind + index
+            args = approval(nonce, amount=1, agent=R)
+            payload = data(inner, P, 1) if inner == SPEND else data(APPROVED, *args)
+            install_relay(R, [payload])
+            before = balance(V), balance(P), balance(R), read('remaining(address)', R)
+            if outer == APPROVED:
+                outer_args = approval(1200 + 3*kind + index, amount=1, payee=R)
+                receipt = send(A, APPROVED, *outer_args)
+                assert read('nonceUsed(uint256)', outer_args[2]) == (1,)
+            else:
+                receipt = send(O if outer.startswith('withdraw') else A, outer, R, 1)
+            results = relay_results(R, 1)
+            expected = int(cast('sig', 'Reentrant()'), 16) << 224
+            assert results == [(0, expected)], (outer, inner, results)
+            assert (balance(V), balance(P), balance(R)) == (before[0] - 1, before[1], before[2] + 1)
+            assert read('remaining(address)', R) == before[3]
+            assert read('nonceUsed(uint256)', nonce) == (0,)
+            assert read('remaining(address)', A)[0] == (25 if outer.startswith('withdraw') else 24)
+            assert len(receipt['logs']) == 1
+            mark(f'caught {outer.split("(")[0]}-to-{inner.split("(")[0]} callback: exact Reentrant, no inner effects')
+
+
 def failure_and_callbacks():
     configure(t=MAX,c=MAX)
     rejected(A, SPEND, [P,balance(V)+1], 'InsufficientBalance')
@@ -305,7 +428,7 @@ def failure_and_callbacks():
     send(O,'withdraw(address,uint256)',R,1)
     assert int(rpc('eth_getStorageAt',R,'0x1','latest'),16)>>224==int(cast('sig','Reentrant()'),16)
     send(A,SPEND,P,1)
-    mark('caught cross-agent and withdraw-to-spend reentry hits shared lock; sequential calls unlock')
+    mark('caught cross-agent and withdraw-to-spend reentry hits shared lock')
     # Exact balance success, then empty balance rejection.
     rpc('anvil_setBalance',V,hex(5)); configure(t=10,c=25)
     send(A,SPEND,P,5)
@@ -389,7 +512,8 @@ def main():
         assert int(deploy['status'],16)==1
         V=deploy['contractAddress']
         send(O,'fund()',value=1_000_000)
-        ordinary_and_admin(); payee_removal(); approvals(); failure_and_callbacks(); windows_and_oracle()
+        ordinary_and_admin(); payee_removal(); approvals(); sequential_calls()
+        approved_callbacks(); failure_and_callbacks(); windows_and_oracle()
         print(f'All {N} integration checks passed; seed 1729, 60 oracle actions.')
     finally:
         process.terminate()
