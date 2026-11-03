@@ -2,12 +2,16 @@
 """Local Anvil integration checks. Python stdlib + cast; no signing keys in source."""
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 import random
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
+
+from corpus import SEEDS, run_corpus
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +24,7 @@ MAX = 2**256 - 1
 N = 0
 
 
+@lru_cache(maxsize=4096)
 def cast(*args):
     return subprocess.check_output([CAST, *map(str, args)], text=True).strip()
 
@@ -126,7 +131,8 @@ def relay_results(address, count):
                   for j in range(2)) for i in range(count)]
 
 
-def rejected(sender, sig, args, error, nonce=0):
+def rejected(sender, sig, args, error, nonce=0, agent=None, payee=None):
+    agent, payee = agent or A, payee or P
     payload = data(sig, *args)
     # Check the exact typed error before mining the same failing request.
     try:
@@ -134,13 +140,13 @@ def rejected(sender, sig, args, error, nonce=0):
         raise AssertionError('expected revert: ' + error)
     except RpcError as ex:
         expected = cast('sig', error + '()')
-        assert ex.error.get('data', '').startswith(expected), (error, ex.error)
+        assert ex.error.get('data') == expected, (error, ex.error)
     # Windows can move as blocks mine; these cases use long periods.
-    before = (read('remaining(address)', A), read('epoch(address)', A), read('nonceUsed(uint256)', nonce), balance(V), balance(P))
+    before = (read('remaining(address)', agent), read('epoch(address)', agent), read('nonceUsed(uint256)', nonce), balance(V), balance(payee))
     receipt = tx(sender, V, payload)
     assert int(receipt['status'], 16) == 0
     assert receipt['logs'] == []
-    after = (read('remaining(address)', A), read('epoch(address)', A), read('nonceUsed(uint256)', nonce), balance(V), balance(P))
+    after = (read('remaining(address)', agent), read('epoch(address)', agent), read('nonceUsed(uint256)', nonce), balance(V), balance(payee))
     assert before == after, (error, before, after)
     mark(error)
     return receipt
@@ -353,8 +359,13 @@ def sequential_calls():
     try:
         V = deploy['contractAddress']
         send(O, 'fund()', value=20)
+        install_relay(relay, [data(SET, A, 10, 25, 3600, False)])
+        setup = tx(O, relay)
+        assert int(setup['status'], 16) == 1 and relay_results(relay, 1) == [(1, 0)]
+        send(A, SPEND, P, 3)
         install_relay(relay, [data('withdraw(address,uint256)', P, amount) for amount in (1, 2)])
         before = balance(V), balance(P), read('remaining(address)', A), read('epoch(address)', A)
+        assert before[2][0] == 22 and before[3] == (1,)
         receipt = tx(O, relay)
         assert int(receipt['status'], 16) == 1
         results = relay_results(relay, 2)
@@ -450,6 +461,47 @@ def failure_and_callbacks():
     mark('full-width approved accounting overflow preserves nonce and balance')
 
 
+def above_cap_accounting():
+    # A small cap makes clipping observable at the exact u256 boundary without
+    # exposing or patching the vault's internal accounting storage.
+    first = '0x0000000000000000000000000000000000009001'
+    second = '0x0000000000000000000000000000000000009002'
+    for payee in (first, second):
+        rpc('anvil_setBalance', payee, '0x0')
+    rpc('anvil_setBalance', V, hex(10))
+    configure(t=1, c=1, allow=True)
+    end = read('remaining(address)', A)[1]
+    receipt = send(A, APPROVED, *approval(2000, amount=2, payee=first))
+    assert (balance(V), balance(first), balance(second)) == (8, 2, 0)
+    assert read('remaining(address)', A) == (0, end)
+    assert read('nonceUsed(uint256)', 2000) == (1,)
+    assert len(receipt['logs']) == 1
+    event(receipt['logs'][0], 'SpentApproved(address,address,uint256,uint256,uint256)',
+          [int(A, 16), int(first, 16), 2, 2000, end - 3600])
+    rpc('anvil_setBalance', V, hex(MAX - 1))
+    signed = approval(2001, amount=MAX - 1, payee=second)
+    receipt = rejected(A, APPROVED, signed, 'AccountingOverflow', 2001, payee=second)
+    mined_error(receipt, 'AccountingOverflow')
+    assert (balance(V), balance(first), balance(second)) == (MAX - 1, 2, 0)
+    assert read('nonceUsed(uint256)', 2000) == (1,)
+    assert read('nonceUsed(uint256)', 2001) == (0,)
+    assert read('remaining(address)', A) == (0, end)
+    # The adjacent representable total succeeds, reusing the unconsumed nonce.
+    receipt = send(A, APPROVED, *approval(2001, amount=MAX - 2, payee=second))
+    assert (balance(V), balance(first), balance(second)) == (1, 2, MAX - 2)
+    assert read('nonceUsed(uint256)', 2001) == (1,)
+    assert read('remaining(address)', A) == (0, end)
+    assert len(receipt['logs']) == 1
+    event(receipt['logs'][0], 'SpentApproved(address,address,uint256,uint256,uint256)',
+          [int(A, 16), int(second, 16), MAX - 2, 2001, end - 3600])
+    receipt = rejected(A, APPROVED, approval(2002, amount=1), 'AccountingOverflow', 2002)
+    mined_error(receipt, 'AccountingOverflow')
+    assert now() < end
+    configure()
+    send(O, 'fund()', value=100_000)
+    mark('small-cap exact approved total: overflow at MAX+1, success at MAX, nonce and transfer rollback')
+
+
 def windows_and_oracle():
     configure(t=100,c=100,period=60)
     end=read('remaining(address)',A)[1]
@@ -491,6 +543,23 @@ def windows_and_oracle():
     mark('independent Python oracle: seed 1729, 60 ordinary actions across four windows')
 
 
+def mixed_oracles():
+    global V
+    original_vault = V
+    actions = 0
+    try:
+        bytecode = (ROOT / 'out/LeashVault.bin').read_text().strip().removeprefix('0x')
+        for seed in SEEDS:
+            deploy = tx(O, payload='0x' + bytecode + O[2:].zfill(64))
+            assert int(deploy['status'], 16) == 1
+            V = deploy['contractAddress']
+            send(O, 'fund()', value=1_000_000)
+            actions += run_corpus(sys.modules[__name__], seed)
+    finally:
+        V = original_vault
+    return actions
+
+
 def main():
     global URL,O,A,B,P,R,G,V
     with socket.socket() as sock:
@@ -513,8 +582,10 @@ def main():
         V=deploy['contractAddress']
         send(O,'fund()',value=1_000_000)
         ordinary_and_admin(); payee_removal(); approvals(); sequential_calls()
-        approved_callbacks(); failure_and_callbacks(); windows_and_oracle()
-        print(f'All {N} integration checks passed; seed 1729, 60 oracle actions.')
+        approved_callbacks(); failure_and_callbacks(); above_cap_accounting(); windows_and_oracle()
+        mixed = mixed_oracles()
+        print(f'All {N} integration checks passed; 60 ordinary oracle actions; '
+              f'{mixed} mixed actions, seeds {SEEDS}.')
     finally:
         process.terminate()
         process.wait(timeout=5)
