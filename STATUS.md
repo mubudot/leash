@@ -25,7 +25,10 @@ Environment: Fe **26.5.1 (149c758)**, Sonatina build **O2**; Anvil/Cast **1.8.7*
 | `fe build -O 2 --emit bytecode,runtime-bytecode,abi` | Passed |
 | `python3 e2e/test_vault.py` | 73 named checks passed, plus 60 seeded ordinary actions |
 | `python3 scripts/mutations.py` | Passing baseline; all 4 compiled mutants detected by intended tests |
+| Fresh committed local clone, `./scripts/check.sh` | Passed on the same machine with externally installed pinned tools |
 | Tracked-file privacy scan | Passed; no private keys or excluded identity text |
+
+The O2 artifact contains 4,501 bytes of creation bytecode (excluding constructor arguments) and 4,354 bytes of runtime bytecode. These are size observations, not comparative gas results.
 
 Negative cases cover asset confusion (8-0000), ETH/time confusion (8-0000), invalid const profile (8-0093), lossy narrowing (8-0055), and absent mutable capability (8-0018).
 
