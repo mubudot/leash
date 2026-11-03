@@ -15,7 +15,9 @@ python3 scripts/mutations.py
 
 The first command checks formatting, runs Fe unit tests and negative compilation cases with positive controls, builds **Sonatina O2**, then deploys that same artifact on a fresh local Anvil. It starts Anvil with `--hardfork osaka --chain-id 31337 --timestamp 1793664000`, chooses a free local port, and stops the process afterward. No external chain, wallet, account credentials, Python packages, or network access are needed after installing the tools. Signing uses Anvil's disposable unlocked accounts via `eth_signTypedData_v4`.
 
-The second command establishes a passing baseline, then runs four intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, and transfer-success check. Source and build artifacts in the repository remain unchanged.
+The second command establishes a passing baseline, then runs ten intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, transfer-success check, ignored payee removal, missing unlock on each of the three transfer routes, all three missing unlocks together, and clipped approved accounting. Source and build artifacts in the repository remain unchanged.
+
+Integration tests include a relay that makes two calls within one transaction and callbacks into both spending routes. The original seed **1729** corpus retains its **60 ordinary actions**. Two additional corpora, seeds **1729** and **104729**, each replay **146 mixed actions** against an independent unbounded payment journal, checking approvals, admin/payment orderings, state, exact mined errors, transfers and event payloads. A failure prints the seed, action index and trace for replay.
 
 Individual commands:
 
@@ -42,6 +44,7 @@ Build artifacts are under `out/`. CI pins download versions and SHA-256 checksum
 | `src/tests.fe` | Fe boundary, full-width, generic reuse and arithmetic tests |
 | `compile_fail/` | Unit/asset confusion, invalid const profile, mutable-capability and narrowing fixtures |
 | `e2e/test_vault.py` | Real callers/signatures/transfers/events, adversarial callbacks, seeded Python oracle |
+| `e2e/oracle.py`, `e2e/corpus.py` | Independent payment-journal model and published mixed-action corpora |
 
 ```fe
 // The vault instantiates this generic policy stack for native ETH.
