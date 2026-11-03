@@ -1,0 +1,10 @@
+pub const MIN_PERIOD: u256 = 60
+pub const MAX_PERIOD: u256 = 31_536_000
+pub const MAX_AMOUNT: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+pub const MAX_TIMESTAMP: u256 = MAX_AMOUNT - MAX_PERIOD
+
+pub const fn valid_limits(_ tx_cap: u256, _ window_cap: u256, _ period: u256) -> bool {
+    period >= MIN_PERIOD && period <= MAX_PERIOD && tx_cap <= window_cap
+}
+
+pub struct Profile<const T: u256, const C: u256, const P: u256> where valid_limits(T, C, P) {}

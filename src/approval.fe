@@ -1,0 +1,36 @@
+use std::evm::{Address, Wei, Timestamp, keccak_packed, eip712}
+
+pub const APPROVAL_TYPEHASH: u256 = core::keccak(
+    "OverCapApproval(address agent,address payee,uint256 amount,uint256 nonce,uint256 deadline,uint256 epoch)",
+)
+
+/// Every element here is a full ABI word, including addresses.
+pub fn approval_digest(
+    _ agent: Address,
+    _ payee: Address,
+    _ amount: Wei,
+    _ nonce: u256,
+    _ deadline: Timestamp,
+    _ epoch: u256,
+    _ chain_id: u256,
+    _ vault: Address,
+) -> u256 {
+    let struct_hash = keccak_packed(
+        (
+            APPROVAL_TYPEHASH,
+            agent.word(),
+            payee.word(),
+            amount.as_wei(),
+            nonce,
+            deadline.as_seconds(),
+            epoch,
+        ),
+    )
+    let domain = eip712::domain_separator(
+        name_hash: core::keccak("Leash"),
+        version_hash: core::keccak("1"),
+        chain_id,
+        verifying_contract: vault,
+    )
+    eip712::digest(domain_separator: domain, struct_hash)
+}

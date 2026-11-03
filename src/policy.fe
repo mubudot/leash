@@ -1,0 +1,58 @@
+use core::result::Result
+use ingot::units::Value
+
+pub enum Violation {
+    PerTx,
+    Window,
+    Payee,
+}
+pub struct PolicyInput<V: Value> { pub amount: V, pub spent: V, pub allowed: bool }
+impl<V: Value> Copy for PolicyInput<V> {}
+
+pub trait Policy<V: Value> {
+    fn check(self, _ input: PolicyInput<V>) -> Result<Violation, ()>
+}
+pub struct PerTxCap<V: Value> { pub cap: V }
+pub struct FixedWindowCap<V: Value> { pub cap: V }
+pub struct PayeeAllowlist { pub enabled: bool }
+pub struct All<A, B> { pub first: A, pub second: B }
+impl<V: Value> Policy<V> for PerTxCap<V> {
+    fn check(self, _ input: PolicyInput<V>) -> Result<Violation, ()> {
+        if input.amount.raw() > self.cap.raw() {
+            Result::Err(Violation::PerTx)
+        } else {
+            Result::Ok(())
+        }
+    }
+}
+impl<V: Value> Policy<V> for FixedWindowCap<V> {
+    fn check(self, _ input: PolicyInput<V>) -> Result<Violation, ()> {
+        let cap = self.cap.raw()
+        let spent = input.spent.raw()
+        if spent > cap {
+            return Result::Err(Violation::Window)
+        }
+        if input.amount.raw() > cap - spent {
+            Result::Err(Violation::Window)
+        } else {
+            Result::Ok(())
+        }
+    }
+}
+impl<V: Value> Policy<V> for PayeeAllowlist {
+    fn check(self, _ input: PolicyInput<V>) -> Result<Violation, ()> {
+        if self.enabled && !input.allowed {
+            Result::Err(Violation::Payee)
+        } else {
+            Result::Ok(())
+        }
+    }
+}
+impl<V: Value, A: Policy<V>, B: Policy<V>> Policy<V> for All<A, B> {
+    fn check(self, _ input: PolicyInput<V>) -> Result<Violation, ()> {
+        match self.first.check(input) {
+            Result::Err(e) => Result::Err(e),
+            Result::Ok(()) => self.second.check(input),
+        }
+    }
+}

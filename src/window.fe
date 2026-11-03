@@ -1,0 +1,27 @@
+use std::evm::{Wei, Timestamp, Duration, wei}
+use ingot::limits::{MIN_PERIOD, MAX_PERIOD, MAX_TIMESTAMP}
+
+pub struct Window { pub start: Timestamp, pub spent: Wei }
+impl Copy for Window {}
+
+/// O(1) normalisation. Endpoints belong to the next anchored window.
+pub fn normalise(_ start: Timestamp, _ period: Duration, _ spent: Wei, _ now: Timestamp) -> Window {
+    let p = period.as_seconds()
+    assert!(p >= MIN_PERIOD && p <= MAX_PERIOD)
+    assert!(start <= now && now.as_seconds() <= MAX_TIMESTAMP)
+    let elapsed = (now - start).as_seconds()
+    if elapsed >= p {
+        Window { start: start + period * (elapsed / p), spent: wei(0) }
+    } else {
+        Window { start, spent }
+    }
+}
+
+pub fn remaining(_ cap: Wei, _ window: Window, _ period: Duration) -> (Wei, Timestamp) {
+    let headroom = if cap >= window.spent {
+        cap - window.spent
+    } else {
+        wei(0)
+    }
+    (headroom, window.start + period)
+}

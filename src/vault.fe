@@ -1,0 +1,367 @@
+use core::option::Option
+use core::result::Result
+use std::abi::{Bytes, sol}
+use std::evm::{
+    Address,
+    Call,
+    Ctx,
+    Log,
+    Mutex,
+    StorageMap,
+    Wei,
+    Timestamp,
+    Duration,
+    wei,
+    signature,
+    revert_error,
+}
+use ingot::limits::{valid_limits, MAX_TIMESTAMP, MAX_AMOUNT}
+use ingot::window::{normalise, remaining}
+use ingot::policy::{Policy, PolicyInput, PerTxCap, FixedWindowCap, PayeeAllowlist, All, Violation}
+use ingot::approval::approval_digest
+use ingot::errors::*
+use ingot::events::*
+
+pub type EthPolicy = All<PerTxCap<Wei>, All<FixedWindowCap<Wei>, PayeeAllowlist>>
+
+pub struct AgentRecord {
+    pub tx_cap: Wei,
+    pub window_cap: Wei,
+    pub period: Duration,
+    pub start: Timestamp,
+    pub spent: Wei,
+    pub active: bool,
+    pub allowlist_on: bool,
+}
+impl Copy for AgentRecord {}
+
+pub msg VaultMsg {
+    #[selector = sol("fund()")]
+    Fund,
+    #[selector = sol("setAgent(address,uint256,uint256,uint256,bool)")]
+    SetAgent { agent: Address, tx_cap: Wei, window_cap: Wei, period: Duration, allowlist_on: bool },
+    #[selector = sol("allowPayee(address,address,bool)")]
+    AllowPayee { agent: Address, payee: Address, allowed: bool },
+    #[selector = sol("revoke(address)")]
+    Revoke { agent: Address },
+    #[selector = sol("pause()")]
+    Pause,
+    #[selector = sol("unpause()")]
+    Unpause,
+    #[selector = sol("cancelApproval(uint256)")]
+    CancelApproval { nonce: u256 },
+    #[selector = sol("withdraw(address,uint256)")]
+    Withdraw { to: Address, amount: Wei },
+    #[selector = sol("spend(address,uint256)")]
+    Spend { payee: Address, amount: Wei },
+    #[selector = sol(
+        "spendApproved(address,uint256,uint256,uint256,uint256,bytes)",
+    )]
+    SpendApproved {
+        payee: Address,
+        amount: Wei,
+        nonce: u256,
+        deadline: Timestamp,
+        epoch: u256,
+        signature: Bytes,
+    },
+    #[selector = sol("remaining(address)")]
+    Remaining { agent: Address } -> (Wei, Timestamp),
+    #[selector = sol("epoch(address)")]
+    Epoch { agent: Address } -> u256,
+    #[selector = sol("nonceUsed(uint256)")]
+    NonceUsed { nonce: u256 } -> bool,
+    #[selector = sol("owner()")]
+    Owner -> Address,
+    #[selector = sol("paused()")]
+    IsPaused -> bool,
+}
+
+fn require_owner(_ caller: Address, _ owner: Address) {
+    if caller != owner {
+        revert_error(Unauthorized {})
+    }
+}
+fn require_time(_ now: Timestamp) {
+    if now.as_seconds() > MAX_TIMESTAMP {
+        revert_error(TimeOutOfRange {})
+    }
+}
+fn next_epoch(_ epoch: u256) -> u256 {
+    if epoch == MAX_AMOUNT {
+        revert_error(EpochOverflow {})
+    }
+    epoch + 1
+}
+fn require_active(_ record: AgentRecord, _ paused: bool) {
+    if !record.active {
+        revert_error(UnknownAgent {})
+    }
+    if paused {
+        revert_error(Paused {})
+    }
+}
+fn checked_spent(_ spent: Wei, _ amount: Wei) -> Wei {
+    if amount == wei(0) {
+        revert_error(ZeroAmount {})
+    }
+    if amount.as_wei() > MAX_AMOUNT - spent.as_wei() {
+        revert_error(AccountingOverflow {})
+    }
+    spent + amount
+}
+
+/// Concrete ETH vault. Only the constructor can assign owner.
+pub contract LeashVault {
+    owner: Address,
+    mut agents: StorageMap<Address, AgentRecord>,
+    mut epochs: StorageMap<Address, u256>,
+    mut payees: StorageMap<(Address, u256, Address), bool>,
+    mut used_nonces: StorageMap<u256, bool>,
+    mut paused: bool,
+    mut guard: Mutex<bool>,
+
+    init(owner_: Address)
+    uses (mut owner)
+    {
+        if owner_ == Address::zero() {
+            revert_error(InvalidOwner {})
+        }
+        owner = owner_
+    }
+
+    recv VaultMsg {
+        #[payable]
+        Fund uses (ctx: Ctx, log: mut Log) {
+            log.emit(Funded { sender: ctx.caller(), amount: ctx.value() })
+        }
+        Owner -> Address uses (owner) {
+            owner
+        }
+        IsPaused -> bool uses (paused) {
+            paused
+        }
+        Epoch { agent } -> u256 uses (epochs) {
+            epochs[agent]
+        }
+        NonceUsed { nonce } -> bool uses (used_nonces) {
+            used_nonces[nonce]
+        }
+        SetAgent { agent, tx_cap, window_cap, period, allowlist_on }
+        uses (owner, mut agents, mut epochs, ctx: Ctx, log: mut Log)
+        {
+            require_owner(ctx.caller(), owner)
+            let now = ctx.timestamp()
+            require_time(now)
+            if !valid_limits(
+                tx_cap.as_wei(),
+                window_cap.as_wei(),
+                period.as_seconds(),
+            ) {
+                revert_error(InvalidLimits {})
+            }
+            let epoch = next_epoch(epochs[agent])
+            epochs[agent] = epoch
+            agents[agent] = AgentRecord {
+                tx_cap,
+                window_cap,
+                period,
+                start: now,
+                spent: wei(0),
+                active: true,
+                allowlist_on,
+            }
+            log.emit(
+                AgentSet { agent, epoch, tx_cap, window_cap, period, allowlist_on },
+            )
+        }
+        AllowPayee { agent, payee, allowed } uses (
+            owner,
+            agents,
+            epochs,
+            mut payees,
+            ctx: Ctx,
+            log: mut Log,
+        ) {
+            require_owner(ctx.caller(), owner)
+            if !agents[agent].active {
+                revert_error(UnknownAgent {})
+            }
+            let epoch = epochs[agent]
+            payees[(agent, epoch, payee)] = allowed
+            log.emit(PayeeSet { agent, epoch, payee, allowed })
+        }
+        Revoke { agent } uses (owner, mut agents, mut epochs, ctx: Ctx, log: mut Log) {
+            require_owner(ctx.caller(), owner)
+            let epoch = next_epoch(epochs[agent])
+            epochs[agent] = epoch
+            agents[agent].active = false
+            log.emit(AgentRevoked { agent, epoch })
+        }
+        Pause uses (owner, mut paused, ctx: Ctx, log: mut Log) {
+            require_owner(ctx.caller(), owner)
+            paused = true
+            log.emit(PauseSet { paused: true })
+        }
+        Unpause uses (owner, mut paused, ctx: Ctx, log: mut Log) {
+            require_owner(ctx.caller(), owner)
+            paused = false
+            log.emit(PauseSet { paused: false })
+        }
+        CancelApproval { nonce } uses (owner, mut used_nonces, ctx: Ctx, log: mut Log) {
+            require_owner(ctx.caller(), owner)
+            used_nonces[nonce] = true
+            log.emit(ApprovalCancelled { nonce })
+        }
+        Remaining { agent } -> (Wei, Timestamp) uses (agents, ctx: Ctx) {
+            let record = agents[agent]
+            if !record.active {
+                return (wei(0), Timestamp::from_seconds(0))
+            }
+            let now = ctx.timestamp()
+            require_time(now)
+            remaining(
+                record.window_cap,
+                normalise(record.start, record.period, record.spent, now),
+                record.period,
+            )
+        }
+        Spend { payee, amount } uses (
+            mut agents,
+            epochs,
+            payees,
+            paused,
+            mut guard,
+            ctx: Ctx,
+            call: mut Call,
+            log: mut Log,
+        ) {
+            let agent = ctx.caller()
+            var record = agents[agent]
+            require_active(record, paused)
+            if !guard.try_lock() {
+                revert_error(Reentrant {})
+            }
+            let now = ctx.timestamp()
+            require_time(now)
+            let window = normalise(record.start, record.period, record.spent, now)
+            let policy: EthPolicy = All {
+                first: PerTxCap { cap: record.tx_cap },
+                second: All {
+                    first: FixedWindowCap { cap: record.window_cap },
+                    second: PayeeAllowlist { enabled: record.allowlist_on },
+                },
+            }
+            match policy
+                .check(
+                    PolicyInput {
+                        amount,
+                        spent: window.spent,
+                        allowed: payees[(agent, epochs[agent], payee)],
+                    },
+                ) {
+                Result::Err(Violation::PerTx) => {
+                    revert_error(PerTxExceeded {})
+                },
+                Result::Err(Violation::Window) => {
+                    revert_error(WindowExceeded {})
+                },
+                Result::Err(Violation::Payee) => {
+                    revert_error(PayeeDenied {})
+                },
+                Result::Ok(()) => {},
+            }
+            if ctx.balance(ctx.address()) < amount {
+                revert_error(InsufficientBalance {})
+            }
+            record.start = window.start
+            record.spent = checked_spent(window.spent, amount)
+            agents[agent] = record
+            log.emit(Spent { agent, payee, amount, window_start: window.start })
+            if !call.send_value(addr: payee, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            guard.unlock()
+        }
+        SpendApproved { payee, amount, nonce, deadline, epoch, signature }
+        uses (
+            owner,
+            mut agents,
+            epochs,
+            mut used_nonces,
+            paused,
+            mut guard,
+            ctx: Ctx,
+            call: mut Call,
+            log: mut Log,
+        )
+        {
+            let agent = ctx.caller()
+            var record = agents[agent]
+            require_active(record, paused)
+            if !guard.try_lock() {
+                revert_error(Reentrant {})
+            }
+            let now = ctx.timestamp()
+            require_time(now)
+            let window = normalise(record.start, record.period, record.spent, now)
+            if now > deadline {
+                revert_error(ApprovalExpired {})
+            }
+            if epoch != epochs[agent] {
+                revert_error(EpochMismatch {})
+            }
+            if used_nonces[nonce] {
+                revert_error(NonceUsed {})
+            }
+            let digest = approval_digest(
+                agent,
+                payee,
+                amount,
+                nonce,
+                deadline,
+                epoch,
+                ctx.chainid(),
+                ctx.address(),
+            )
+            match signature::recover(digest, signature.payload_span()) {
+                Option::Some(signer) => {
+                    if signer == Address::zero() || signer != owner {
+                        revert_error(InvalidSignature {})
+                    }
+                },
+                Option::None => {
+                    revert_error(InvalidSignature {})
+                },
+            }
+            if ctx.balance(ctx.address()) < amount {
+                revert_error(InsufficientBalance {})
+            }
+            record.start = window.start
+            record.spent = checked_spent(window.spent, amount)
+            agents[agent] = record
+            used_nonces[nonce] = true
+            log.emit(
+                SpentApproved { agent, payee, amount, nonce, window_start: window.start },
+            )
+            if !call.send_value(addr: payee, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            guard.unlock()
+        }
+        Withdraw { to, amount } uses (owner, mut guard, ctx: Ctx, call: mut Call, log: mut Log) {
+            require_owner(ctx.caller(), owner)
+            if !guard.try_lock() {
+                revert_error(Reentrant {})
+            }
+            if ctx.balance(ctx.address()) < amount {
+                revert_error(InsufficientBalance {})
+            }
+            log.emit(Withdrawn { to, amount })
+            if !call.send_value(addr: to, gas: ctx.gas(), value: amount).success() {
+                revert_error(TransferFailed {})
+            }
+            guard.unlock()
+        }
+    }
+}

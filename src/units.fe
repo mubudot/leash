@@ -1,0 +1,31 @@
+use std::evm::Wei
+
+/// Asset tags prevent amounts of different tokens being interchanged.
+pub trait Asset {
+    const DECIMALS: u256
+}
+
+pub struct Amount<A: Asset> { pub raw: u256 }
+impl<A: Asset> Copy for Amount<A> {}
+
+pub trait Value: Copy {
+    fn raw(self) -> u256
+}
+impl Value for Wei {
+    fn raw(self) -> u256 {
+        self.as_wei()
+    }
+}
+impl<A: Asset> Value for Amount<A> {
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+impl<A: Asset> Amount<A> {
+    pub fn checked_add(self, _ rhs: Self) -> Self {
+        Amount { raw: self.raw + rhs.raw }
+    }
+    pub fn checked_sub(self, _ rhs: Self) -> Self {
+        Amount { raw: self.raw - rhs.raw }
+    }
+}

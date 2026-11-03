@@ -1,0 +1,154 @@
+use core::result::Result
+use std::evm::{wei, seconds, Timestamp}
+use ingot::limits::{valid_limits, MIN_PERIOD, MAX_PERIOD, MAX_AMOUNT, MAX_TIMESTAMP, Profile}
+use ingot::window::{normalise, remaining}
+use ingot::units::{Asset, Amount}
+use ingot::policy::{Policy, PolicyInput, PerTxCap, FixedWindowCap, PayeeAllowlist, All, Violation}
+
+struct MockUsd {}
+impl Asset for MockUsd {
+    const DECIMALS: u256 = 6
+}
+struct OtherToken {}
+impl Asset for OtherToken {
+    const DECIMALS: u256 = 18
+}
+
+#[test]
+fn limits_are_shared_and_full_width() {
+    let _profile: Profile<10, 100, 60> = Profile {}
+    assert!(valid_limits(10, 100, MIN_PERIOD))
+    assert!(valid_limits(MAX_AMOUNT, MAX_AMOUNT, MAX_PERIOD))
+    assert!(!valid_limits(101, 100, 60))
+    assert!(!valid_limits(0, 0, 59))
+    assert!(!valid_limits(0, 0, MAX_PERIOD + 1))
+    assert!(valid_limits(0, 0, 60))
+}
+
+#[test]
+fn half_open_window_and_skipped_periods() {
+    let start = Timestamp::from_seconds(100)
+    let before = normalise(start, seconds(60), wei(30), Timestamp::from_seconds(159))
+    assert!(before.start == start && before.spent == wei(30))
+    let boundary = normalise(start, seconds(60), wei(30), Timestamp::from_seconds(160))
+    assert!(
+        boundary.start.as_seconds() == 160 && boundary.spent == wei(0),
+    )
+    let after = normalise(start, seconds(60), wei(30), Timestamp::from_seconds(161))
+    assert!(after.start.as_seconds() == 160 && after.spent == wei(0))
+    let idle = normalise(
+        start,
+        seconds(60),
+        wei(30),
+        Timestamp::from_seconds(600_119),
+    )
+    assert!(idle.start.as_seconds() == 600_100 && idle.spent == wei(0))
+}
+
+#[test]
+fn approved_over_cap_headroom_saturates_without_losing_accounting() {
+    let w = normalise(
+        Timestamp::from_seconds(100),
+        seconds(60),
+        wei(150),
+        Timestamp::from_seconds(159),
+    )
+    let (left, end) = remaining(wei(100), w, seconds(60))
+    assert!(left == wei(0) && end.as_seconds() == 160)
+    assert!(w.spent == wei(150))
+}
+
+#[test]
+fn max_timestamp_has_representable_window_end() {
+    let now = Timestamp::from_seconds(MAX_TIMESTAMP)
+    let w = normalise(now, seconds(MAX_PERIOD), wei(MAX_AMOUNT), now)
+    let (left, end) = remaining(wei(MAX_AMOUNT), w, seconds(MAX_PERIOD))
+    assert!(left == wei(0) && end.as_seconds() == MAX_AMOUNT)
+}
+
+#[test]
+fn composed_policy_reused_for_eth_and_token() {
+    let eth = All {
+        first: PerTxCap { cap: wei(10) },
+        second: All {
+            first: FixedWindowCap { cap: wei(20) },
+            second: PayeeAllowlist { enabled: true },
+        },
+    }
+    match eth.check(
+        PolicyInput { amount: wei(10), spent: wei(10), allowed: true },
+    ) {
+        Result::Ok(()) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+    let token = All {
+        first: PerTxCap { cap: Amount<MockUsd> { raw: 10 } },
+        second: All {
+            first: FixedWindowCap { cap: Amount<MockUsd> { raw: 20 } },
+            second: PayeeAllowlist { enabled: true },
+        },
+    }
+    match token
+        .check(
+            PolicyInput {
+                amount: Amount<MockUsd> { raw: 10 },
+                spent: Amount<MockUsd> { raw: 10 },
+                allowed: true,
+            },
+        ) {
+        Result::Ok(()) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+    assert!(MockUsd::DECIMALS == 6)
+    let x = Amount<OtherToken> { raw: 7 }.checked_add(Amount<OtherToken> { raw: 8 })
+    assert!(x.raw == 15)
+}
+
+#[test]
+fn policy_rejections_and_over_cap_ordinary_zero() {
+    match (PerTxCap { cap: wei(10) })
+        .check(
+            PolicyInput { amount: wei(11), spent: wei(0), allowed: true },
+        ) {
+        Result::Err(Violation::PerTx) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+    match (FixedWindowCap { cap: wei(20) })
+        .check(
+            PolicyInput { amount: wei(1), spent: wei(20), allowed: true },
+        ) {
+        Result::Err(Violation::Window) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+    match (FixedWindowCap { cap: wei(20) })
+        .check(
+            PolicyInput { amount: wei(0), spent: wei(21), allowed: true },
+        ) {
+        Result::Err(Violation::Window) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+    match (PayeeAllowlist { enabled: true })
+        .check(
+            PolicyInput { amount: wei(1), spent: wei(0), allowed: false },
+        ) {
+        Result::Err(Violation::Payee) => {},
+        _ => {
+            assert!(false)
+        },
+    }
+}
+
+#[test(should_revert, selector = 0x4e487b71)]
+fn token_arithmetic_is_checked() {
+    let _ = Amount<MockUsd> { raw: MAX_AMOUNT }.checked_add(Amount<MockUsd> { raw: 1 })
+}

@@ -1,0 +1,56 @@
+#[error]
+pub struct Unauthorized {}
+
+#[error]
+pub struct InvalidOwner {}
+
+#[error]
+pub struct InvalidLimits {}
+
+#[error]
+pub struct TimeOutOfRange {}
+
+#[error]
+pub struct UnknownAgent {}
+
+#[error]
+pub struct Paused {}
+
+#[error]
+pub struct Reentrant {}
+
+#[error]
+pub struct PerTxExceeded {}
+
+#[error]
+pub struct WindowExceeded {}
+
+#[error]
+pub struct PayeeDenied {}
+
+#[error]
+pub struct ZeroAmount {}
+
+#[error]
+pub struct InsufficientBalance {}
+
+#[error]
+pub struct TransferFailed {}
+
+#[error]
+pub struct AccountingOverflow {}
+
+#[error]
+pub struct EpochOverflow {}
+
+#[error]
+pub struct ApprovalExpired {}
+
+#[error]
+pub struct NonceUsed {}
+
+#[error]
+pub struct InvalidSignature {}
+
+#[error]
+pub struct EpochMismatch {}

@@ -1,0 +1,37 @@
+use std::evm::{Address, Wei, Timestamp, Duration}
+#[event]
+pub struct Spent {
+    pub agent: Address,
+    pub payee: Address,
+    pub amount: Wei,
+    pub window_start: Timestamp,
+}
+#[event]
+pub struct SpentApproved {
+    pub agent: Address,
+    pub payee: Address,
+    pub amount: Wei,
+    pub nonce: u256,
+    pub window_start: Timestamp,
+}
+#[event]
+pub struct AgentSet {
+    pub agent: Address,
+    pub epoch: u256,
+    pub tx_cap: Wei,
+    pub window_cap: Wei,
+    pub period: Duration,
+    pub allowlist_on: bool,
+}
+#[event]
+pub struct AgentRevoked { pub agent: Address, pub epoch: u256 }
+#[event]
+pub struct PayeeSet { pub agent: Address, pub epoch: u256, pub payee: Address, pub allowed: bool }
+#[event]
+pub struct PauseSet { pub paused: bool }
+#[event]
+pub struct ApprovalCancelled { pub nonce: u256 }
+#[event]
+pub struct Withdrawn { pub to: Address, pub amount: Wei }
+#[event]
+pub struct Funded { pub sender: Address, pub amount: Wei }
