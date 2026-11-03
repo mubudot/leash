@@ -40,7 +40,7 @@ def rpc(method, *params):
 
 
 @contextmanager
-def local_chain(chain_id=31337):
+def local_chain(chain_id=31337, *, steps_tracing=False):
     """Own one disposable Anvil process, shared by the suite and CLI demo."""
     global URL, O, A, B, P, R, G
     with socket.socket() as sock:
@@ -49,7 +49,8 @@ def local_chain(chain_id=31337):
     URL = f'http://127.0.0.1:{port}'
     process = subprocess.Popen(
         [ANVIL, '--silent', '--hardfork', 'osaka', '--chain-id', str(chain_id),
-         '--timestamp', '1793664000', '--port', str(port)],
+         '--timestamp', '1793664000', '--port', str(port)]
+        + (['--steps-tracing'] if steps_tracing else []),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(100):

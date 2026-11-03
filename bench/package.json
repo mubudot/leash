@@ -1,0 +1,5 @@
+{
+  "name": "leash-bench",
+  "private": true,
+  "dependencies": { "solc": "0.8.30" }
+}

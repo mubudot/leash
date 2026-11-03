@@ -21,7 +21,14 @@ jobs:
           tar -xzf foundry.tar.gz
           chmod +x fe
           echo "$RUNNER_TEMP/leash-tools" >> "$GITHUB_PATH"
-      - name: Format, unit, negative compilation, O2 build and Anvil checks
+      - name: Install pinned Solidity compiler
+        run: npm ci --prefix bench --ignore-scripts --no-audit --no-fund
+      - name: Format, unit, negative compilation, O2 and Solidity builds, Anvil differential checks
         run: ./scripts/check.sh
       - name: Mutation controls
         run: python3 scripts/mutations.py
+      - name: Receipt gas observations (no performance gate)
+        continue-on-error: true
+        run: |
+          python3 bench/gas.py
+          cat out/bench/RESULTS.md >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,17 @@
+{
+  "variants": [
+    "fe",
+    "legacy",
+    "via-ir"
+  ],
+  "observations_per_variant": 11112,
+  "transcript_sha256": "b850a5b4282827f1cb4bb05b25b665ace73dd6ae81640e3a0b2d4798a0c7a394",
+  "checks_per_variant": 114,
+  "ordinary_seed": 1729,
+  "ordinary_actions": 60,
+  "mixed_seeds": [
+    1729,
+    104729
+  ],
+  "mixed_actions": 292
+}

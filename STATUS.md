@@ -12,6 +12,7 @@ Implemented from scratch on 2026-11-03 after 00:00 UTC. Local commits only, auth
 - EIP-712 exact-payment approvals bound to caller/payee/amount/nonce/deadline/epoch and live chain/address domain; canonical ECDSA plus EIP-2098; global nonce use/cancellation.
 - Checked approved accounting, distinct typed errors/events, a shared transient mutex, checked transfer success and atomic rollback.
 - README, MIT license, privacy-conscious ignore rules, pinned CI definition and one-command local verification including an asserted CLI payment walkthrough.
+- Matched Solidity mirror, pinned solc legacy/via-IR builds, ABI/layout checks, full-suite semantic differential gate and reproducible receipt-gas comparison.
 
 ## Verification evidence
 
@@ -26,6 +27,9 @@ Environment: Fe **26.5.1 (149c758)**, Sonatina build **O2**; Anvil/Cast **1.8.7*
 | `python3 e2e/test_vault.py` | 110 named checks passed on chains 31337/31338, including 60 seeded ordinary actions and 292 mixed actions |
 | `python3 e2e/demo.py` | 22 asserted transactions; decoded events, expected mined errors, balances, headroom and receipt gas |
 | `python3 scripts/mutations.py` | Passing baseline; all 11 compiled mutants detected by intended tests |
+| `python3 bench/build.py` | solc 0.8.30 legacy and via-IR, Osaka, optimizer 200; ABI and six-word record layout match Fe |
+| `python3 bench/test_semantics.py` | 114 checks and 11,112 matching observations per variant; both Solidity transcripts equal Fe |
+| `python3 bench/gas.py` | All 18 scenarios x 3 variants x 3 repetitions; matching state/events/calldata and exact receipt/refund/floor accounting |
 | Original Phase 1 snapshot (`2145ad0`), fresh local clone, `./scripts/check.sh` | Passed on the same machine with externally installed pinned tools |
 | Tracked-file privacy scan | Passed; no private keys or excluded identity text |
 
@@ -51,10 +55,19 @@ Mutation controls flip `>=` at the boundary, remove the approved route's active/
 
 The CLI walkthrough is implemented in `e2e/demo.py` and included in `scripts/check.sh`, reusing that command's O2 artifact. Its standalone command builds O2 first. The committed `e2e/DEMO.md` supersedes the preparatory outline's obsolete errors and commands. All 22 transactions assert success or exact mined rejection; the separate burst fixture asserts payment receipt timestamps at boundary minus one second and the boundary. Receipt gas is printed without comparative claims.
 
+## Solidity comparison and review 3 I1
+
+The missing Solidity comparison implementation identified by review 3 I1 is complete. `scripts/check.sh` and CI now require both pinned Solidity builds and the semantic differential suite, retaining the original Fe tests, integration assertions and mutation controls. The mirror matches the full-width fields, six-word records with adjacent boolean flags, tuple-payee slot derivation, custom errors/events, live domains, signature forms, gross accounting, transient lock and transfer semantics. Actual storage probes also cover final-epoch configuration/revocation and their exact overflow rollback.
+
+All 110 existing integration checks, both chain IDs and the published 60 ordinary / 292 mixed oracle actions run against each compiler, followed by four layout/epoch checks. The resulting 11,112-observation transcripts match exactly. The committed [semantic summary](bench/SEMANTICS.json) records their digest; full transcripts and compiler inputs/outputs are generated in ignored `out/bench/`.
+
+The [receipt table](bench/RESULTS.md), [raw samples](bench/results.json), [method](bench/README.md) and [layout notes](bench/LAYOUT.md) record the comparison. Each of 18 fixed scenarios starts a fresh Osaka Anvil at timestamp 1793664000 on chain 31337 for each compiler and repetition, with deterministic one-second blocks. All three repetitions agree. Gas is observed without performance thresholds; CI measurement is nonblocking. Fe's 74,445-gas first ordinary spend compares with 75,288 legacy / 75,180 via-IR, but funding and withdrawal cost more than legacy, and Fe deployment costs 1,003,057 versus 984,151 via-IR. The complete table retains these losses and the floor-bound unauthorized-setter tie, with computed intrinsic/floor values and the 4,800-gas configuration-reset refund. Runtime sizes are Fe 4,354 / legacy 5,595 / via-IR 4,297 bytes. These are pinned implementation observations, not a general language ranking.
+
+The comparison was verified locally on Linux ARM64 with Node 22.23.3 and locked solc 0.8.30+commit.73712a01. A hosted CI run and another-platform verification are still unestablished; completing these local I1 deliverables does not close the entire release gate.
+
 ## Remaining full-design gate
 
-- Complete remaining reentry permutations and administrative edges, plus full vault/storage/context harnesses for epoch exhaustion and out-of-domain timestamps; their actual guard helpers now have endpoint coverage.
-- Build and semantically verify the matched Solidity mirror, then measure receipt gas, intrinsic/floor accounting, layout and deploy/runtime sizes under the design's methodology. No gas advantage is claimed.
+- Complete remaining reentry permutations and administrative edges, plus a block-context harness for out-of-domain timestamps; actual guard helpers and final-epoch storage transitions have endpoint coverage.
 - Further independent security review, fresh environments beyond the recorded local platform, and an actual hosted CI run. CI is configured but has not been pushed or run remotely.
 - Submission/release paperwork, reviewed final SHA and any publication remain separate work.
 

@@ -3,6 +3,7 @@
 /artifacts/
 /.venv/
 __pycache__/
+/bench/node_modules/
 *.pyc
 *.log
 .env

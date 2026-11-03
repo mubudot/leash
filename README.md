@@ -6,20 +6,23 @@ The mechanism follows established delegated-spending patterns. Its contribution 
 
 ## Run locally
 
-Requirements: **Fe 26.5.1 (149c758)**, **Foundry 1.8.7**, Python 3.10+, Bash, and Linux or macOS. Put `fe`, `cast`, and `anvil` on PATH, or set `FE`, `CAST`, and `ANVIL` to their executable paths. Official downloads: [Fe release](https://github.com/argotorg/fe/releases/tag/v26.5.1), [Foundry release](https://github.com/foundry-rs/foundry/releases/tag/v1.8.7).
+Requirements: **Fe 26.5.1 (149c758)**, **Foundry 1.8.7**, Python 3.10+, Node.js and npm (recorded run: Node 22.23.3), Bash, and Linux or macOS. Put `fe`, `cast`, and `anvil` on PATH, or set `FE`, `CAST`, and `ANVIL` to their executable paths. Official downloads: [Fe release](https://github.com/argotorg/fe/releases/tag/v26.5.1), [Foundry release](https://github.com/foundry-rs/foundry/releases/tag/v1.8.7).
 
 ```sh
+npm ci --prefix bench --ignore-scripts --no-audit --no-fund
 ./scripts/check.sh
 python3 scripts/mutations.py
 ```
 
-The first command checks formatting, runs Fe unit tests and negative compilation cases with positive controls, builds **Sonatina O2**, then deploys that same artifact for integration checks and the CLI walkthrough. Each local Anvil starts with `--hardfork osaka --timestamp 1793664000`, uses a free local port, and stops afterward. The main suite and demo use chain ID **31337**; domain regressions also change the live chain ID after deployment and run a fresh deployment on **31338**. No external chain, wallet, account credentials, Python packages, or network access are needed after installing the tools. Signing uses Anvil's disposable unlocked accounts via `eth_signTypedData_v4`, with the default domain chain ID read from RPC.
+The npm command installs locked **solc 0.8.30** dependencies. `check.sh` checks formatting, runs Fe unit tests and negative compilation cases with positive controls, builds **Sonatina O2**, then deploys that same artifact for integration checks and the CLI walkthrough. It also builds the matched Solidity mirror with legacy and via-IR codegen and requires semantic equality against the Fe artifact. Each local Anvil starts with `--hardfork osaka --timestamp 1793664000`, uses a free local port, and stops afterward. The main suite and demo use chain ID **31337**; domain regressions also change the live chain ID after deployment and run a fresh deployment on **31338**. No external chain, wallet, account credentials, Python packages, or network access are needed after installing tools and npm dependencies. Signing uses Anvil's disposable unlocked accounts via `eth_signTypedData_v4`, with the default domain chain ID read from RPC.
 
-The second command establishes a passing baseline, then runs eleven intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, transfer-success check, ignored payee removal, missing unlock on each of the three transfer routes, all three missing unlocks together, clipped approved accounting, and a hardcoded domain chain ID of 31337. The baseline build refreshes the repository's `out/` artifacts. Source files remain unchanged; mutant builds and their artifacts are isolated in temporary directories.
+The mutation command establishes a passing baseline, then runs eleven intentionally broken copies in temporary directories. Each must compile and fail the intended runtime test: boundary comparison, approved-route activity/pause check, nonce consumption, transfer-success check, ignored payee removal, missing unlock on each of the three transfer routes, all three missing unlocks together, clipped approved accounting, and a hardcoded domain chain ID of 31337. The baseline build refreshes the repository's `out/` artifacts. Source files remain unchanged; mutant builds and their artifacts are isolated in temporary directories.
 
 Integration tests include a relay that makes two calls within one transaction and callbacks into both spending routes. The original seed **1729** corpus retains its **60 ordinary actions**. Two additional corpora, seeds **1729** and **104729**, each replay **146 mixed actions** against an independent unbounded payment journal, checking approvals, admin/payment orderings, state, exact mined errors, transfers and event payloads. A failure prints the seed, action index and trace for replay.
 
 For the payment walkthrough alone, run `python3 e2e/demo.py`. It builds O2, prints balances, headroom, ABI-decoded events, expected mined errors and receipt gas for 22 transactions, including an exact owner approval, replay rejection, revocation and a separate fixed-window burst trace. See the [current demo guide](e2e/DEMO.md). These receipt observations are not a Solidity gas comparison.
+
+For the matched Solidity comparison, run `python3 bench/gas.py` after `check.sh`. The [receipt table](bench/RESULTS.md) reports all 18 fixed scenarios across Fe O2, Solidity legacy and Solidity via-IR, including losses, intrinsic costs, calldata floors and refunds. See the [method and semantic gate](bench/README.md), [raw samples](bench/results.json) and [matched storage layout](bench/LAYOUT.md). Gas observations are nonblocking in CI; Solidity builds and semantic checks are blocking.
 
 Individual commands:
 
@@ -48,6 +51,7 @@ Build artifacts are under `out/`. CI pins download versions and SHA-256 checksum
 | `e2e/test_vault.py` | Real callers/signatures/transfers/events, adversarial callbacks, seeded Python oracle |
 | `e2e/oracle.py`, `e2e/corpus.py` | Independent payment-journal model and published mixed-action corpora |
 | `e2e/demo.py`, `e2e/DEMO.md` | Asserted local CLI walkthrough, decoded events and receipt gas |
+| `bench/` | Matched Solidity mirror, full-suite semantic comparison, actual layout checks and fixed receipt matrix |
 
 ```fe
 // The vault instantiates this generic policy stack for native ETH.
