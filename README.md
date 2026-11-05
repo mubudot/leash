@@ -4,6 +4,8 @@ Leash is a Fe spending-policy library and reference ETH vault for delegated keys
 
 The library combines nominal asset and time types, generic policies and a shared compile-time/runtime limit validator. The vault demonstrates their use with real ETH transfers, EIP-712 approvals and reproducible local tests.
 
+**Demo video (1:51):** https://youtu.be/uhCKq3Aynmw
+
 **Experimental and unaudited.** The implementation has local verification evidence, but the full release gate remains open. See [status and outstanding work](STATUS.md).
 
 ## Install and verify
